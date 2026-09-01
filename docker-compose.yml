@@ -1,0 +1,99 @@
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fieldops
+      POSTGRES_USER: fieldops
+      POSTGRES_PASSWORD: fieldops
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fieldops -d fieldops"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - fieldops_postgres:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ./backend
+      target: runtime
+    environment:
+      FIELDOPS_DATABASE_URL: ${FIELDOPS_DATABASE_URL:-postgresql+asyncpg://fieldops:fieldops@database:5432/fieldops}
+      FIELDOPS_JWT_SECRET: ${FIELDOPS_JWT_SECRET:-local-development-secret-change-me}
+      FIELDOPS_ACCESS_TOKEN_EXPIRE_MINUTES: ${FIELDOPS_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      FIELDOPS_CORS_ORIGINS: ${FIELDOPS_CORS_ORIGINS:-http://localhost:8060}
+      FIELDOPS_ADMIN_EMAIL: ${FIELDOPS_ADMIN_EMAIL:-admin@example.com}
+      FIELDOPS_ADMIN_PASSWORD: ${FIELDOPS_ADMIN_PASSWORD:-ChangeMe123!}
+      FIELDOPS_DISPATCHER_EMAIL: ${FIELDOPS_DISPATCHER_EMAIL:-dispatcher@example.com}
+      FIELDOPS_DISPATCHER_PASSWORD: ${FIELDOPS_DISPATCHER_PASSWORD:-ChangeMe123!}
+      FIELDOPS_TECHNICIAN_EMAIL: ${FIELDOPS_TECHNICIAN_EMAIL:-technician@example.com}
+      FIELDOPS_TECHNICIAN_PASSWORD: ${FIELDOPS_TECHNICIAN_PASSWORD:-ChangeMe123!}
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "${FIELDOPS_API_PORT:-8061}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      NEXT_PUBLIC_FIELDOPS_API_URL: ${NEXT_PUBLIC_FIELDOPS_API_URL:-http://localhost:8061}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${FIELDOPS_WEB_PORT:-8060}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  database-test:
+    image: postgres:17-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: fieldops_test
+      POSTGRES_USER: fieldops
+      POSTGRES_PASSWORD: fieldops
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fieldops -d fieldops_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  test:
+    build:
+      context: ./backend
+      target: test
+    profiles: ["test"]
+    environment:
+      FIELDOPS_DATABASE_URL: postgresql+asyncpg://fieldops:fieldops@database-test:5432/fieldops_test
+      FIELDOPS_JWT_SECRET: test-only-secret-at-least-thirty-two-bytes-long
+      FIELDOPS_ADMIN_EMAIL: admin-test@example.com
+      FIELDOPS_ADMIN_PASSWORD: TestAdmin123!
+      FIELDOPS_DISPATCHER_EMAIL: dispatcher-test@example.com
+      FIELDOPS_DISPATCHER_PASSWORD: TestDispatcher123!
+      FIELDOPS_TECHNICIAN_EMAIL: technician-test@example.com
+      FIELDOPS_TECHNICIAN_PASSWORD: TestTechnician123!
+    depends_on:
+      database-test:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m fieldops.seed && pytest"]
+
+volumes:
+  fieldops_postgres:
