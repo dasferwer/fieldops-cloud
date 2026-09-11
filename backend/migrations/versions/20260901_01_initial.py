@@ -1,4 +1,4 @@
-"""initial field service schema
+"""Создаём таблицы заявок, сотрудников и выездных работ.
 
 Revision ID: 20260901_01
 Revises:
