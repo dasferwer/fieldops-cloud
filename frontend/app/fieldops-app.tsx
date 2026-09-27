@@ -186,7 +186,11 @@ function LoginScreen({ onSuccess }: { onSuccess: (token: string) => void }) {
                 <AlertDescription>{mutation.error.message}</AlertDescription>
               </Alert>
             )}
-            <Button className="h-10 w-full" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              className="h-10 w-full"
+              disabled={mutation.isPending}
+            >
               {mutation.isPending ? 'Подключение…' : 'Войти как диспетчер'}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
