@@ -1,0 +1,44 @@
+name: Проверки
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --project backend --extra dev --frozen
+      - run: uv run --project backend ruff check backend
+      - run: uv run --project backend ruff format --check backend
+      - run: uv run --project backend mypy backend/src
+      - run: docker compose config --quiet
+      - run: docker compose --profile test build test
+      - run: docker compose --profile test run --rm test
+      - run: docker compose up --build -d --wait --wait-timeout 180 api
+      - run: curl --fail http://localhost:8061/health
+      - if: always()
+        run: docker compose --profile test logs --tail=30
+      - if: always()
+        run: docker compose --profile test down -v
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npx oxfmt --check app/fieldops-app.tsx lib/api.ts
+      - run: npm run build

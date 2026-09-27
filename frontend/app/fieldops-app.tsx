@@ -766,18 +766,50 @@ export function FieldOpsApp() {
 
   useEffect(() => {
     if (!token) return;
-    const socket = new WebSocket(realtimeUrl(token));
-    socket.onopen = () => setSocketState('live');
-    socket.onmessage = () =>
-      queryClient.invalidateQueries({ queryKey: ['fieldops'] });
-    socket.onerror = () => setSocketState('offline');
-    socket.onclose = () => setSocketState('offline');
-    const heartbeat = window.setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) socket.send('ping');
-    }, 20_000);
+    let stopped = false;
+    let cursor: number | undefined;
+    let attempts = 0;
+    let socket: WebSocket | undefined;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => {
+      void queryClient.invalidateQueries({ queryKey: ['fieldops'] });
+    };
+    const connect = () => {
+      if (stopped) return;
+      setSocketState('connecting');
+      socket = new WebSocket(realtimeUrl());
+      socket.onopen = () => socket?.send(JSON.stringify({ token, cursor }));
+      socket.onmessage = (message) => {
+        const frame = JSON.parse(message.data);
+        if (frame.type === 'connected') {
+          attempts = 0;
+          setSocketState('live');
+          // Полный запрос после подключения восстанавливает также изменения прав.
+          refresh();
+        }
+        if (frame.type === 'reset' || frame.events?.length) refresh();
+        if (Number.isSafeInteger(frame.cursor)) cursor = frame.cursor;
+      };
+      socket.onerror = () => setSocketState('offline');
+      socket.onclose = (event) => {
+        if (stopped) return;
+        setSocketState('offline');
+        if (event.code === 4401 || event.code === 4403) {
+          stopped = true;
+          sessionStorage.removeItem('fieldops-token');
+          queryClient.clear();
+          setToken(null);
+          return;
+        }
+        const delay = Math.min(30_000, 500 * 2 ** Math.min(attempts++, 6));
+        timer = setTimeout(connect, delay + Math.random() * 250);
+      };
+    };
+    connect();
     return () => {
-      window.clearInterval(heartbeat);
-      socket.close();
+      stopped = true;
+      clearTimeout(timer);
+      socket?.close();
     };
   }, [queryClient, token]);
 

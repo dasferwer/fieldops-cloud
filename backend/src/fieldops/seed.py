@@ -38,7 +38,7 @@ async def run_seed() -> None:
     admin = await ensure_user(
         settings.admin_email,
         settings.admin_password.get_secret_value(),
-        "FieldOps Administrator",
+        "Администратор FieldOps",
         UserRole.ADMIN,
     )
     dispatcher = await ensure_user(
@@ -53,8 +53,18 @@ async def run_seed() -> None:
         "Алексей Морозов",
         UserRole.TECHNICIAN,
     )
-    await ensure_user("irina@example.com", "ChangeMe123!", "Ирина Волкова", UserRole.TECHNICIAN)
-    await ensure_user("denis@example.com", "ChangeMe123!", "Денис Ким", UserRole.TECHNICIAN)
+    await ensure_user(
+        "irina@example.com",
+        settings.technician_password.get_secret_value(),
+        "Ирина Волкова",
+        UserRole.TECHNICIAN,
+    )
+    await ensure_user(
+        "denis@example.com",
+        settings.technician_password.get_secret_value(),
+        "Денис Ким",
+        UserRole.TECHNICIAN,
+    )
 
     async with SessionFactory() as session:
         site_specs = [

@@ -3,7 +3,17 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from fieldops.db import Base
@@ -118,3 +128,20 @@ class IdempotencyRecord(Base):
     request_hash: Mapped[str] = mapped_column(String(64))
     work_order_id: Mapped[UUID] = mapped_column(ForeignKey("work_orders.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class StreamState(Base):
+    __tablename__ = "stream_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    position: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class StreamEvent(Base):
+    __tablename__ = "stream_events"
+
+    position: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    work_order_id: Mapped[UUID] = mapped_column(ForeignKey("work_orders.id"))
+    version: Mapped[int] = mapped_column(Integer)
+    previous_assignee_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

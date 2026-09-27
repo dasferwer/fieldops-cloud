@@ -11,7 +11,12 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_timeout=5,
+    connect_args={"server_settings": {"statement_timeout": "10000", "lock_timeout": "3000"}},
+)
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 

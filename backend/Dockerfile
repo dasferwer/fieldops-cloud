@@ -22,10 +22,11 @@ FROM base AS runtime
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY scripts ./scripts
-RUN chmod +x ./scripts/docker-entrypoint.sh
+RUN chmod +x ./scripts/docker-entrypoint.sh && useradd --uid 10001 --create-home app
+USER app
 
 ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
-CMD ["uvicorn", "fieldops.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "fieldops.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--ws-max-size", "8192", "--ws-max-queue", "4"]
 
 FROM base AS test
 
@@ -33,5 +34,6 @@ RUN uv sync --frozen --extra dev
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY tests ./tests
+COPY scripts ./scripts
 CMD ["pytest"]
 

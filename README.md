@@ -1,149 +1,122 @@
 # FieldOps Cloud
 
-Fullstack-платформа для диспетчеризации выездных работ: заявки, назначение
-техников, контроль SLA, строгая машина состояний и обновления в реальном
-времени. Проект показывает не только CRUD, а типовые проблемы рабочего B2B
-продукта — права доступа, конкурентное редактирование, повторные запросы и
-аудит действий.
-
-> English overview: a production-shaped field-service operations platform
-> built with FastAPI, PostgreSQL and React. It demonstrates RBAC, SLA tracking,
-> idempotent writes, optimistic concurrency, audit history and WebSocket-driven
-> UI refreshes.
+Платформа выездного обслуживания: диспетчер создаёт и назначает заявки,
+техник выполняет свои работы, интерфейс обновляется через WebSocket.
+PostgreSQL хранит заявки, аудит, ключи повторных запросов и журнал уведомлений.
 
 ## История проекта
 
-- первоначальная разработка: июль — сентябрь 2025 года (период указан
-  приблизительно);
+- первоначальная разработка: июль — сентябрь 2025 года (период указан приблизительно);
 - подготовка портфолио-версии: сентябрь 2026 года.
 
-Репозиторий содержит актуализированную и документированную версию проекта,
-подготовленную для публичного портфолио.
+## Возможности
 
-![FieldOps Cloud social preview](frontend/public/og.png)
+- JWT и роли `admin`, `dispatcher`, `technician`; пароль хешируется scrypt.
+- Фильтрация заявок, пагинация, назначение, контроль SLA и история переходов.
+- Проверка `version` под блокировкой строки: конкурентный проигравший получает 409.
+- Создание с `Idempotency-Key`: одинаковые конкурентные запросы создают одну заявку;
+  изменение тела под прежним ключом возвращает 409. Повтор возвращает текущее состояние заявки.
+- Завершённую или отменённую заявку нельзя переназначить. Блокировка требует причины.
+- Долговечные уведомления фиксируются вместе с изменением заявки. Подписка может
+  подключиться к любому API-процессу и продолжить чтение с прежнего курсора.
+- Техник получает сигналы только о доступных ему заявках. После переназначения
+  прежнему исполнителю приходит только ID удаляемой из его списка заявки.
+- Срок JWT, активность пользователя и изменение роли проверяются при опросе журнала.
+- Frontend переподключается с задержкой, восстанавливает курсор и обновляет данные через REST.
+- Отдельный запуск миграций, два API-процесса, непривилегированный runtime, GitHub Actions.
 
-## Что реализовано
+## Запуск
 
-- роли `admin`, `dispatcher`, `technician` и JWT-аутентификация;
-- заявки с фильтрацией, пагинацией, назначением исполнителя и SLA;
-- допустимые переходы `new → assigned → en_route → in_progress → completed`;
-- блокировка некорректных переходов и обязательная причина для `blocked`;
-- optimistic locking через поле `version` и ответ `409 Conflict`;
-- идемпотентное создание по `Idempotency-Key` с защитой от смены payload;
-- журнал событий каждой заявки;
-- WebSocket-уведомления и инвалидация клиентского кеша;
-- агрегаты dashboard по статусам, приоритетам и выполнению SLA;
-- адаптивный интерфейс с формами React Hook Form + Zod;
-- миграции Alembic, seed-данные, OpenAPI и интеграционные тесты.
-
-## Стек
-
-**Backend:** Python 3.13, FastAPI, SQLAlchemy 2 (async), PostgreSQL 17,
-Alembic, Pydantic 2, PyJWT, Argon2, pytest, Ruff, mypy.
-
-**Frontend:** React 19, TypeScript, Vinext, TanStack Query, React Hook Form,
-Zod, shadcn/ui, Tailwind CSS.
-
-**Infrastructure:** Docker Compose, multi-stage Dockerfiles, health checks.
-
-## Быстрый запуск
-
-Требуются Docker и Docker Compose.
+Нужны Docker и Compose. Все порты стенда привязаны к `127.0.0.1`.
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
+docker compose up --build -d --wait --wait-timeout 180
 ```
 
-После прохождения health checks:
+Интерфейс: <http://localhost:8060>. Swagger: <http://localhost:8061/docs>.
+Проверка БД: <http://localhost:8061/health>.
+Контейнер `migrate` применяет миграции и добавляет демонстрационные данные,
+затем завершается. Повторное заполнение сохраняет существующих пользователей и заявки.
 
-- интерфейс: <http://localhost:8060>
-- Swagger UI: <http://localhost:8061/docs>
-- health check: <http://localhost:8061/health>
-
-Демонстрационные пользователи:
-
-| Роль | Email | Пароль |
+| Роль | Email | Начальный пароль |
 |---|---|---|
-| Admin | `admin@example.com` | `ChangeMe123!` |
-| Dispatcher | `dispatcher@example.com` | `ChangeMe123!` |
-| Technician | `technician@example.com` | `ChangeMe123!` |
+| Администратор | `admin@example.com` | `ChangeMe123!` |
+| Диспетчер | `dispatcher@example.com` | `ChangeMe123!` |
+| Техник | `technician@example.com` | `ChangeMe123!` |
 
-Значения предназначены только для локального запуска и меняются через `.env`.
+Дополнительные техники `irina@example.com` и `denis@example.com` используют
+значение `FIELDOPS_TECHNICIAN_PASSWORD` при первом создании.
+Это демонстрационные учётные записи. `.env.example` перечисляет настройки;
+смена пароля в `.env` не переписывает пароль уже созданного пользователя.
+`NEXT_PUBLIC_FIELDOPS_API_URL` передаётся при сборке frontend: после изменения нужна пересборка.
 
-Остановка:
-
-```bash
-docker compose down
-```
+Остановка с сохранением данных: `docker compose down`.
 
 ## Проверки
 
-Backend quality gate:
+Из корня репозитория:
 
 ```bash
-cd backend
-uv sync --dev
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy src
+uv sync --project backend --extra dev --frozen
+uv run --project backend ruff check backend
+uv run --project backend ruff format --check backend
+uv run --project backend mypy backend/src
+docker compose --profile test build test
+docker compose --profile test run --rm test
 ```
 
-Интеграционные тесты в изолированной PostgreSQL:
-
-```bash
-docker compose --profile test up --build \
-  --abort-on-container-exit --exit-code-from test
-docker compose --profile test down
-```
-
-Frontend quality gate:
+Тесты используют отдельную БД `fieldops_test`. Поднимаются два настоящих HTTP/WebSocket
+процесса; проверяются межпроцессная доставка, переподключение, изоляция, отзыв доступа,
+истечение JWT, гонки создания и изменения, откат при ошибке журнала.
+После тестов проверяется переход между старой и новой схемой с сохранением
+пользователей, заявок, аудита и ключей повторов. Журнал уведомлений в тестовой БД
+при этой проверке пересоздаётся. Рабочий volume не затрагивается.
 
 ```bash
 cd frontend
 npm ci
-npm run format -- --check
 npm run lint
 npx tsc --noEmit
+npx oxfmt --check app/fieldops-app.tsx lib/api.ts
 npm run build
 ```
 
-## Архитектура и решения
+GitHub Actions выполняет эти проверки, собирает backend и проверяет запуск API.
+Проверка frontend включает сборку; браузерные сценарии автоматически в CI не выполняются.
 
-Подробная схема, модель конкурентного обновления и границы системы описаны в
-[docs/architecture.md](docs/architecture.md).
+## Архитектура и API
 
-Основные API-маршруты:
+Python 3.12+, FastAPI, SQLAlchemy 2, PostgreSQL 17, Alembic, Pydantic, PyJWT.
+Frontend: React, TypeScript, Vinext, TanStack Query, React Hook Form, Zod.
+Версии зависимостей зафиксированы в `backend/uv.lock` и `frontend/package-lock.json`.
 
-| Метод | Маршрут | Назначение |
-|---|---|---|
-| `POST` | `/api/v1/auth/token` | OAuth2 password login |
-| `GET` | `/api/v1/dashboard` | агрегаты с учётом роли |
-| `GET/POST` | `/api/v1/work-orders` | поиск и создание заявок |
-| `POST` | `/api/v1/work-orders/{id}/assign` | назначение техника |
-| `POST` | `/api/v1/work-orders/{id}/transition` | переход состояния |
-| `GET` | `/api/v1/work-orders/{id}/events` | аудит заявки |
-| `WS` | `/api/v1/realtime?token=...` | события для интерфейса |
+| Маршрут | Назначение |
+|---|---|
+| `POST /api/v1/auth/token` | Получить токен |
+| `GET /api/v1/dashboard` | Показатели доступных заявок |
+| `GET/POST /api/v1/work-orders` | Найти или создать заявку |
+| `POST /api/v1/work-orders/{id}/assign` | Назначить техника с проверкой версии |
+| `POST /api/v1/work-orders/{id}/transition` | Изменить статус с проверкой версии |
+| `GET /api/v1/work-orders/{id}/events` | Прочитать аудит |
+| `WS /api/v1/realtime` | Подписаться на сигналы обновления |
 
-## Проверяемые сценарии отказа
+[Архитектура и протокол подписки](docs/architecture.md).
+[Диагностика и восстановление](docs/runbook.md).
+[Фактически выполненные проверки](docs/verification.md).
 
-- повтор создания с тем же ключом возвращает исходную заявку;
-- тот же ключ с другим телом запроса возвращает `409`;
-- устаревшая версия заявки возвращает `409` и актуальную версию;
-- запрещённый переход состояния возвращает `409`;
-- техник видит только назначенные ему заявки и не может отменить работу;
-- переход в `blocked` без причины отклоняется валидацией.
+## Ограничения
 
-## Repository map
+Одна сервисная организация, одна PostgreSQL, без кластерной отказоустойчивости.
+Журнал сериализует короткую завершающую часть транзакций; это осознанный предел
+пропускной способности, а не заявление о работе при промышленной нагрузке.
+Каждая подписка опрашивает БД раз в секунду. Автоматического удаления журнала,
+квот соединений, MFA, refresh-токенов и защиты входа от перебора нет.
+Для внешнего развёртывания нужны TLS, отдельные секреты и ограничение входящего трафика.
 
-```text
-backend/                 FastAPI application and integration tests
-  migrations/            Alembic migration history
-  src/fieldops/           domain, API, auth, realtime and seed modules
-frontend/                React operations dashboard
-docs/architecture.md     design decisions and diagrams
-docker-compose.yml       application and isolated test profiles
-```
-
-Проект является демонстрационным: внешняя отправка уведомлений и промышленное
-хранение секретов оставлены за границами локальной версии.
+Гарантия доставки относится к сохранённым изменениям в этой БД. Уведомления могут
+повторяться; frontend перечитывает авторизованное состояние. Отставание более
+10 000 событий вызывает полную синхронизацию. История до миграции не превращается
+в уведомления: при первом подключении интерфейс получает актуальные данные через REST.
+Права проверяются на момент чтения очередного пакета; уже отправленные сообщения
+невозможно отозвать. Полные данные заявки в WebSocket не передаются.

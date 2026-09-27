@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,9 +15,11 @@ from fieldops.models import (
     UserRole,
     WorkOrder,
     WorkOrderEvent,
+    WorkOrderPriority,
     WorkOrderStatus,
 )
-from fieldops.schemas import WorkOrderCreate, WorkOrderRead
+from fieldops.schemas import WorkOrderAssign, WorkOrderCreate, WorkOrderRead, WorkOrderTransition
+from fieldops.stream import append_event
 
 ACTIVE_STATUSES = {
     WorkOrderStatus.NEW,
@@ -65,8 +67,8 @@ def to_work_order_read(order: WorkOrder) -> WorkOrderRead:
         site_address=order.site.address,
         assignee_id=order.assignee_id,
         assignee_name=order.assignee.full_name if order.assignee else None,
-        priority=order.priority,
-        status=order.status,
+        priority=WorkOrderPriority(order.priority),
+        status=WorkOrderStatus(order.status),
         scheduled_for=order.scheduled_for,
         sla_due_at=order.sla_due_at,
         sla_breached=order.status in {status.value for status in ACTIVE_STATUSES}
@@ -84,8 +86,7 @@ def request_hash(payload: WorkOrderCreate) -> str:
 
 
 def new_order_number() -> str:
-    now = datetime.now(UTC)
-    return f"WO-{now:%y%m%d}-{uuid4().hex[:6].upper()}"
+    return f"WO-{uuid4().hex.upper()}"
 
 
 async def validate_relations(
@@ -119,6 +120,11 @@ async def create_work_order(
     payload: WorkOrderCreate,
     idempotency_key: str,
 ) -> tuple[WorkOrder, bool]:
+    # Один ключ сериализуем до проверки повтора; другие запросы не блокируют друг друга.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 606))"),
+        {"key": f"{actor.id}:{idempotency_key}"},
+    )
     payload_hash = request_hash(payload)
     existing = await session.scalar(
         select(IdempotencyRecord).where(
@@ -172,6 +178,7 @@ async def create_work_order(
             ),
         ]
     )
+    await append_event(session, order)
     await session.commit()
     loaded = await session.scalar(work_order_query().where(WorkOrder.id == order.id))
     if loaded is None:
@@ -215,3 +222,79 @@ def assert_transition(current: str, target: WorkOrderStatus) -> None:
 async def total_for_query(session: AsyncSession, query: Select[tuple[WorkOrder]]) -> int:
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     return int((await session.scalar(count_query)) or 0)
+
+
+async def assign_work_order(
+    session: AsyncSession, actor: User, order_id: UUID, payload: WorkOrderAssign
+) -> WorkOrderRead:
+    order = await locked_work_order(session, order_id)
+    assert_version(order, payload.version)
+    if order.status not in ACTIVE_STATUSES:
+        raise HTTPException(409, "Нельзя переназначить завершённую или отменённую заявку")
+    _, assignee = await validate_relations(session, order.site_id, payload.assignee_id)
+    if assignee is None:
+        raise HTTPException(422, "Необходимо указать техника")
+    previous_assignee, previous_status = order.assignee_id, order.status
+    order.assignee_id = assignee.id
+    if order.status == WorkOrderStatus.NEW:
+        order.status = WorkOrderStatus.ASSIGNED
+    order.version += 1
+    session.add(
+        WorkOrderEvent(
+            work_order_id=order.id,
+            actor_id=actor.id,
+            event_type="assigned",
+            from_status=previous_status,
+            to_status=WorkOrderStatus(order.status),
+            payload={
+                "previous_assignee_id": str(previous_assignee) if previous_assignee else None,
+                "assignee_id": str(assignee.id),
+            },
+        )
+    )
+    await append_event(session, order, previous_assignee)
+    await session.commit()
+    return await read_changed_order(session, order_id)
+
+
+async def transition_work_order(
+    session: AsyncSession, actor: User, order_id: UUID, payload: WorkOrderTransition
+) -> WorkOrderRead:
+    order = await locked_work_order(session, order_id)
+    assert_technician_access(order, actor)
+    assert_version(order, payload.version)
+    if actor.role == UserRole.TECHNICIAN and payload.status == WorkOrderStatus.CANCELLED:
+        raise HTTPException(403, "Техник не может отменять заявки")
+    if payload.status == WorkOrderStatus.ASSIGNED:
+        raise HTTPException(409, "Для назначения используйте команду выбора техника")
+    if payload.status == WorkOrderStatus.BLOCKED and not (payload.comment or "").strip():
+        raise HTTPException(422, "Укажите причину блокировки")
+    assert_transition(order.status, payload.status)
+    previous = order.status
+    order.status = payload.status
+    order.version += 1
+    if payload.status == WorkOrderStatus.COMPLETED:
+        order.completed_at = datetime.now(UTC)
+    session.add(
+        WorkOrderEvent(
+            work_order_id=order.id,
+            actor_id=actor.id,
+            event_type="status_changed",
+            from_status=previous,
+            to_status=WorkOrderStatus(order.status),
+            comment=payload.comment,
+        )
+    )
+    await append_event(session, order)
+    await session.commit()
+    return await read_changed_order(session, order_id)
+
+
+async def read_changed_order(session: AsyncSession, order_id: UUID) -> WorkOrderRead:
+    # Повторно загружаем отношения: в identity map мог остаться прежний исполнитель.
+    order = await session.scalar(
+        work_order_query().where(WorkOrder.id == order_id).execution_options(populate_existing=True)
+    )
+    if order is None:
+        raise HTTPException(404, "Заявка не найдена")
+    return to_work_order_read(order)

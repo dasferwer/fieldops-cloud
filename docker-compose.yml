@@ -17,10 +17,12 @@ services:
     build:
       context: ./backend
       target: runtime
-    environment:
+    environment: &application-environment
       FIELDOPS_DATABASE_URL: ${FIELDOPS_DATABASE_URL:-postgresql+asyncpg://fieldops:fieldops@database:5432/fieldops}
       FIELDOPS_JWT_SECRET: ${FIELDOPS_JWT_SECRET:-local-development-secret-change-me}
       FIELDOPS_ACCESS_TOKEN_EXPIRE_MINUTES: ${FIELDOPS_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      FIELDOPS_REALTIME_POLL_SECONDS: ${FIELDOPS_REALTIME_POLL_SECONDS:-1}
+      FIELDOPS_REALTIME_SEND_TIMEOUT: ${FIELDOPS_REALTIME_SEND_TIMEOUT:-5}
       FIELDOPS_CORS_ORIGINS: ${FIELDOPS_CORS_ORIGINS:-http://localhost:8060}
       FIELDOPS_ADMIN_EMAIL: ${FIELDOPS_ADMIN_EMAIL:-admin@example.com}
       FIELDOPS_ADMIN_PASSWORD: ${FIELDOPS_ADMIN_PASSWORD:-ChangeMe123!}
@@ -29,10 +31,10 @@ services:
       FIELDOPS_TECHNICIAN_EMAIL: ${FIELDOPS_TECHNICIAN_EMAIL:-technician@example.com}
       FIELDOPS_TECHNICIAN_PASSWORD: ${FIELDOPS_TECHNICIAN_PASSWORD:-ChangeMe123!}
     depends_on:
-      database:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
-      - "${FIELDOPS_API_PORT:-8061}:8000"
+      - "127.0.0.1:${FIELDOPS_API_PORT:-8061}:8000"
     healthcheck:
       test:
         - CMD
@@ -43,16 +45,28 @@ services:
       timeout: 3s
       retries: 20
 
+  migrate:
+    build:
+      context: ./backend
+      target: runtime
+    environment: *application-environment
+    depends_on:
+      database:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m fieldops.seed"]
+
   frontend:
     build:
       context: ./frontend
+      args:
+        NEXT_PUBLIC_FIELDOPS_API_URL: ${NEXT_PUBLIC_FIELDOPS_API_URL:-http://localhost:8061}
     environment:
       NEXT_PUBLIC_FIELDOPS_API_URL: ${NEXT_PUBLIC_FIELDOPS_API_URL:-http://localhost:8061}
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "${FIELDOPS_WEB_PORT:-8060}:3000"
+      - "127.0.0.1:${FIELDOPS_WEB_PORT:-8060}:3000"
     healthcheck:
       test:
         - CMD
@@ -93,7 +107,7 @@ services:
     depends_on:
       database-test:
         condition: service_healthy
-    command: ["sh", "-c", "alembic upgrade head && python -m fieldops.seed && pytest"]
+    command: ["sh", "-c", "alembic upgrade head && python -m fieldops.seed && pytest && python scripts/check_migration.py"]
 
 volumes:
   fieldops_postgres:

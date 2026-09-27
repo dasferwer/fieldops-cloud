@@ -155,10 +155,9 @@ export const fieldOpsApi = {
     }),
 };
 
-export function realtimeUrl(token: string): string {
+export function realtimeUrl(): string {
   const url = new URL(API_URL);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/api/v1/realtime';
-  url.searchParams.set('token', token);
   return url.toString();
 }

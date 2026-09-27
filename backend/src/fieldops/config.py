@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     dispatcher_password: SecretStr = SecretStr("ChangeMe123!")
     technician_email: str = "technician@example.com"
     technician_password: SecretStr = SecretStr("ChangeMe123!")
+
+    realtime_poll_seconds: float = Field(default=1, ge=0.05, le=30)
+    realtime_send_timeout: float = Field(default=5, ge=0.05, le=30)
 
     @property
     def allowed_origins(self) -> list[str]:
