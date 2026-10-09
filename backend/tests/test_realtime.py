@@ -274,3 +274,43 @@ async def test_subscription_expires_even_without_new_events(nodes: list[str]) ->
         assert error.value.rcvd is not None and error.value.rcvd.code == 4401
     finally:
         await websocket.close()
+
+
+async def test_reconnect_after_retention_requests_full_reset(
+    client: AsyncClient, nodes: list[str], preserve_journal: None
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from fieldops.config import Settings
+    from fieldops.models import StreamEvent
+    from fieldops.retention import clean_stream
+
+    token, site, technician = await dispatcher_context(client)
+    cursor = await head()
+    created = await client.post(
+        "/api/v1/work-orders",
+        json=order_payload(site, technician),
+        headers={**auth(token), "Idempotency-Key": str(uuid4())},
+    )
+    assert created.status_code == 201
+    position = await head()
+    async with SessionFactory() as cleaner, cleaner.begin():
+        await cleaner.execute(
+            update(StreamEvent).values(occurred_at=datetime.now(UTC) - timedelta(days=2))
+        )
+        await clean_stream(cleaner, Settings(stream_retention_seconds=1), dry_run=False)
+    websocket = await subscribe(nodes[1], token, cursor)
+    try:
+        assert json.loads(await asyncio.wait_for(websocket.recv(), 2)) == {
+            "type": "reset",
+            "cursor": position,
+        }
+        # Reset — требование перечитать REST, где текущая заявка по-прежнему доступна.
+        current = await client.get(
+            "/api/v1/work-orders/" + created.json()["id"], headers=auth(token)
+        )
+        assert current.status_code == 200
+    finally:
+        await websocket.close()

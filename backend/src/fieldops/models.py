@@ -135,6 +135,7 @@ class StreamState(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     position: Mapped[int] = mapped_column(BigInteger, default=0)
+    retained_after: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
 class StreamEvent(Base):

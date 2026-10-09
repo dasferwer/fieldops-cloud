@@ -37,8 +37,10 @@ async def append_event(
 
 
 async def read_batch(session: AsyncSession, user: User, cursor: int) -> dict[str, object]:
-    head = (await session.execute(select(StreamState.position))).scalar_one()
-    if cursor < 0 or cursor > head or head - cursor > MAX_REPLAY:
+    head, floor = (
+        await session.execute(select(StreamState.position, StreamState.retained_after))
+    ).one()
+    if cursor < floor or cursor > head or head - cursor > MAX_REPLAY:
         return {"type": "reset", "cursor": head}
     rows = (
         await session.execute(
@@ -49,6 +51,13 @@ async def read_batch(session: AsyncSession, user: User, cursor: int) -> dict[str
             .limit(BATCH_SIZE)
         )
     ).all()
+    # READ COMMITTED: очистка могла завершиться между чтением state и событий.
+    # Повторная проверка исключает тихий пропуск удалённых позиций без блокировки писателей.
+    current_head, current_floor = (
+        await session.execute(select(StreamState.position, StreamState.retained_after))
+    ).one()
+    if cursor < current_floor:
+        return {"type": "reset", "cursor": current_head}
     events = []
     for event, assignee in rows:
         visible = user.role in {UserRole.ADMIN, UserRole.DISPATCHER} or assignee == user.id

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     realtime_poll_seconds: float = Field(default=1, ge=0.05, le=30)
     realtime_send_timeout: float = Field(default=5, ge=0.05, le=30)
+    stream_retention_seconds: int = Field(default=0, ge=0, le=31_536_000)
+    stream_retention_batch_size: int = Field(default=1000, ge=1, le=10_000)
 
     @property
     def allowed_origins(self) -> list[str]:
